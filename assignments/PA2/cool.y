@@ -211,6 +211,8 @@
     { $$ = nil_Formals(); }
     | nonempty_formal_list
     { $$ = $1; }
+    | error
+    { $$ = nil_Formals(); }
     ;
 
     nonempty_formal_list
@@ -242,17 +244,27 @@
     nonempty_expression_semicolon_list
     : expression ';'
     { $$ = single_Expressions($1); }
+    | error ';'
+    { $$ = nil_Expressions(); }
     | nonempty_expression_semicolon_list expression ';'
     { $$ = append_Expressions($1, single_Expressions($2)); }
+    | nonempty_expression_semicolon_list error ';'
+    { $$ = $1; }
     ;
 
     let_binding
-    : OBJECTID ':' TYPEID opt_init IN expression %prec LET
-    { $$ = let($1, $3, $4, $6); }
-    | OBJECTID ':' TYPEID opt_init ',' let_binding
-    { $$ = let($1, $3, $4, $6); }
-    | error ','
+    : OBJECTID ':' TYPEID ASSIGN expression IN expression %prec LET
+    { $$ = let($1, $3, $5, $7); }
+    | OBJECTID ':' TYPEID IN expression %prec LET
+    { $$ = let($1, $3, no_expr(), $5); }
+    | error IN expression
     { }
+    | OBJECTID ':' TYPEID ASSIGN expression ',' let_binding
+    { $$ = let($1, $3, $5, $7); }
+    | OBJECTID ':' TYPEID ',' let_binding
+    { $$ = let($1, $3, no_expr(), $5); }
+    | error ',' let_binding
+    { $$ = $3; }
     ;
 
     nonempty_case_list
@@ -324,7 +336,6 @@
     { $$ = string_const($1); }
     | BOOL_CONST
     { $$ = bool_const($1); }
-    | error 
     ;
     
     /* end of grammar */
