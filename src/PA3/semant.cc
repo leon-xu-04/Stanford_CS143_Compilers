@@ -245,13 +245,6 @@ void ClassTable::insert_class_map(Class_ class_) {
 }
 
 bool ClassTable::check_parents_valid() {
-  bool inheritable = check_parents_inheritable();
-  bool defined = check_parents_defined();
-
-  return inheritable && defined;
-}
-
-bool ClassTable::check_parents_inheritable() {
   bool valid = true;
 
   for (ClassMap::iterator it = class_map.begin(); it != class_map.end(); ++it) {
@@ -263,21 +256,7 @@ bool ClassTable::check_parents_inheritable() {
       semant_error(c) << "Class " << n << " cannot inherit class " << p
                       << ".\n";
       valid = false;
-    }
-  }
-
-  return valid;
-}
-
-bool ClassTable::check_parents_defined() {
-  bool valid = true;
-
-  for (ClassMap::iterator it = class_map.begin(); it != class_map.end(); ++it) {
-    Class_ c = it->second.class_;
-    Symbol n = c->get_name();
-    Symbol p = c->get_parent_name();
-
-    if (p != No_class && p != SELF_TYPE && !class_exists(p)) {
+    } else if (p != No_class && !class_exists(p)) {
       semant_error(c) << "Class " << n << " inherits from an undefined class "
                       << p << ".\n";
       valid = false;
@@ -864,13 +843,28 @@ Symbol typcase_class::type_check(TypeEnv &te) {
       seen.insert(c->get_type_decl());
     }
 
+    bool type_decl_exists = te.class_table->class_exists(c->get_type_decl());
+    if (c->get_type_decl() != SELF_TYPE && ! type_decl_exists) {
+      te.error(c) << "Class " << c->get_type_decl()
+        << " of case branch is undefined.\n";
+    }
+
+    if (c->get_name() == self) {
+      te.error(c) << "'self' bound in 'case'.\n";
+    }
+
     if (c->get_type_decl() == SELF_TYPE) {
       te.error(c) << "Identifier " << c->get_name()
                   << " declared with type SELF_TYPE in case branch.\n";
     }
 
     te.sym_tab.enterscope();
-    te.sym_tab.addid(c->get_name(), c->get_type_decl());
+    if (type_decl_exists) {
+      te.sym_tab.addid(c->get_name(), c->get_type_decl());
+    } else {
+      te.sym_tab.addid(c->get_name(), Object);
+    }
+
     Symbol t = c->get_expr()->type_check(te);
     te.sym_tab.exitscope();
 
@@ -893,6 +887,12 @@ Symbol block_class::type_check(TypeEnv &te) {
 Symbol let_class::type_check(TypeEnv &te) {
   if (identifier == self) {
     te.error(this) << "'self' cannot be bound in a 'let' expression.\n";
+  }
+  
+  bool type_decl_valid = te.class_table->class_exists(type_decl);
+  if (! type_decl_valid) {
+    te.error(init) << "Class " << type_decl
+      << " of let-bound identifier " << identifier << " is undefined.\n";
   }
 
   Symbol t1 = init->type_check(te);

@@ -18,6 +18,14 @@ class D {
       x_3: C => x_3;
     esac
   };
+
+  yet_another_func(): Int {
+    case 1 of
+      x: Undefined => x;
+      y: Undefined => 3 + "str";
+      self: Int => self + 2;
+    esac
+  };
 };
 
 class Main {

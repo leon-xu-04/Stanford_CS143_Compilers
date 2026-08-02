@@ -1,4 +1,8 @@
 class Main {
+  undefined(): Int {
+    let x: Undefined in 0
+  };
+
   func(): Int {
     let x: Int in x + 2
   };

@@ -55,8 +55,6 @@ private:
   void install_user_classes(Classes classes);
   void insert_class_map(Class_ class_);
   bool check_parents_valid();
-  bool check_parents_inheritable();
-  bool check_parents_defined();
   bool check_inheritance_cycles();
   void check_main_class();
   bool is_basic_class(Symbol class_name);
