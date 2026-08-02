@@ -26,75 +26,131 @@ computes its node's `T`.
 
 ### Multi-Pass Class Validation and Forced Ordering
 
-<!-- TODO: install basic+user classes -> duplicate/reserved-name checks ->
-parent validity (inheritable + defined) -> cycle detection -> Main check.
-Explain WHY the order is forced: each pass's safety depends on the previous
-(can't walk parent links until every parent is proven to exist). -->
+Starting this project was painful: there are so many specifications, and I had
+no idea what to check first. Breaking the requirements down by dependency is
+what helped. Within phase 1:
+
+  - collect all class names first (inheritance can't be checked against names
+    we haven't seen), catching duplicates and reserved names while collecting
+  - once the names are in, check every parent is defined and inheritable
+  - only then run cycle detection, which walks parent links and would crash or
+    loop on an unvalidated hierarchy
+
+Each step is only safe because the previous one ran. The same logic forces the
+phase 1 / phase 2 split itself: phase 2 calls `parent_of()` constantly, so it
+needs the whole hierarchy proven first.
 
 ### class_map as the Class-Name Symbol Table
 
-<!-- TODO: why a map (name -> Class_ node) and not a set; why the value is the
-node pointer (cycle walk needs parents, errors need line numbers, later phases
-need features); why the 5 basic classes live in the same map as user classes. -->
+The AST stores a class's parent as a `Symbol` (a name), not a pointer — the
+parser couldn't link nodes that might not exist yet. So the core operation of
+this whole assignment is name -> node resolution, and that is exactly a
+`Symbol -> Class_` map. A set of `Class_` wouldn't work: to find a class in it
+you'd already need the pointer you're looking for.
 
 ### Cycle Detection
 
-<!-- TODO: the naive walk-to-root bug (infinite loop when a class dangles off a
-cycle: A -> B -> C -> B), and the fix. State the invariant: no cycles iff every
-class reaches Object. -->
+For each class, we repeatedly step to its parent. If the walk reaches `Object`,
+the class is not on a cycle; if it revisits a class, it is.
+
+This is not optimally efficient: when a walk reaches `Object`, every class on
+that path is also proven cycle-free, but we throw that information away and
+re-walk from each of them. We kept the naive version because clarity and
+correctness are the goals here, and class hierarchies are tiny.
 
 ### TypeEnv and the ClassTable Facade
 
-<!-- TODO: bundling O/M/C into one struct passed by reference; SymbolTable held
-by value and what its persistent-list copy semantics mean (snapshot, nothing
-ever freed); the te.conforms/te.lub/te.error facade and why the logic stays on
-ClassTable (state ownership). Honest trade-off: conforms/lub taking TypeEnv
-couples the layers; a plain self-class Symbol parameter would decouple them. -->
+I bundled O, M, C into a `TypeEnv` struct so every typing rule takes one
+argument instead of three. Since the rules invoke the same few ClassTable
+queries constantly, I added facade methods (`te.conforms`, `te.lub`,
+`te.error`) to cut the call-site noise; the logic stays on `ClassTable`, which
+owns the class hierarchy.
+
+Reading `symtab.h` surprised me: nothing is ever freed. Scope nodes are shared
+between table copies (that's what makes copying a table a cheap snapshot), so
+no single owner could safely delete them — and since a compiler is a one-shot
+program rather than a persistent server, leaking is an acceptable price.
 
 ### SELF_TYPE: Lazy Resolution
 
-<!-- TODO: self is bound to the literal SELF_TYPE symbol; the subscript C is
-never stored - it is reconstructed from te.current_class at each use site
-(conforms, lub, dispatch). Why eager resolution to C is unsound: the choose()
-example, lub(SELF_TYPE, SELF_TYPE) = SELF_TYPE, and why nothing concrete
-conforms to SELF_TYPE (inheritance makes it a moving target). -->
+The lazy resolution of SELF_TYPE is the most interesting idea in the project,
+and I didn't appreciate it while first implementing it. We keep the type as
+the literal `SELF_TYPE` symbol until an operation forces us to resolve it to
+the current class — for example, `lub(SELF_TYPE, SELF_TYPE) = SELF_TYPE`.
+Resolving early throws away precision that can never be recovered.
+
+What felt unintuitive at first: nothing concrete conforms to SELF_TYPE. The
+reason is inheritance — SELF_TYPE can stand for any subclass of the current
+class, including ones not written yet, so no fixed type can be guaranteed to
+conform to it.
 
 ### Error Recovery Conventions
 
-<!-- TODO: report, recover, keep checking. Object as the fallback type;
-No_type strictly for absent expressions (attr/let without init); "erroneous
-declarations produce no bindings" (self attr, self in let/case) so the real
-self binding is never shadowed. Halt gates: after the constructor and after
-type checking - why type checking must not run on a broken hierarchy. -->
+Phase 1 errors are not recovered from: if the hierarchy is broken, everything
+downstream (`parent_of`, conformance, lub) is meaningless, so we halt before
+phase 2.
+
+Within phase 2 we report and keep going: an undefined type becomes `Object`
+and checking proceeds. The cost is cascading errors — a body recovered to
+`Object` then fails its declared return type, producing a second message for
+one mistake. A better design would be a dedicated error type that conforms to
+everything, so errors derived from an already-reported one stay silent.
 
 ### Virtual type_check on AST Nodes
 
-<!-- TODO: one method per node kind mirrors the manual's one rule per form;
-declared through Expression_EXTRAS (= 0) and Expression_SHARED_EXTRAS in
-cool-tree.handcode.h, bodies in semant.cc. Contrast with the rejected
-alternative (dynamic_cast chain in ClassTable). Note the set_type + return
-pair every rule must maintain and why (return feeds the parent rule, set_type
-feeds dump_with_types). -->
+The AST is a good exemplification of virtual functions: an abstract class per
+node category (Expression, Feature, Formal, ...) with one concrete class per
+form, so each typing rule is a `type_check` override and dynamic dispatch
+picks the right one — no long `dynamic_cast` chains.
+
+The mechanism for adding these methods is unusual: `cool-tree.h` is
+auto-generated, so instead of editing it we define the declarations as macros
+in `cool-tree.handcode.h`, which the generated file expands at `#ifdef` hook
+points, and put the bodies in `semant.cc`.
 
 ### Shared Helpers Instead of Repeated Rules
 
-<!-- TODO: type_check_int_binop with an explicit result_type parameter (the
-op-string-inspection bug: control coupling, pointer == on string literals);
-type_check_call shared by dispatch and static dispatch (lookup_class vs
-receiver_type as the two axes of variation, SELF_TYPE return tracks the
-receiver). -->
+We tried to maximize reuse: one helper covers all six Int-operand operators
+(parameterized by result type), dispatch and static dispatch share their
+argument-checking core, and `parent_of` / `conforms` / `lub` back every
+hierarchy question.
 
 ## Why the Code Is Correct
 
-<!-- TODO: each expression rule is a transcription of the manual's typing rule;
-conforms and lub are the only two type-algebra operations and both are simple
-parent-chain walks over class_map; methods are checked once in their defining
-class and remain sound for all subclasses (monotonicity: the check establishes
-C <= T, any D <= C gives D <= T by transitivity). -->
+My development flow was roughly TDD after mapping out a checklist per phase.
+The phase 1 rules were the hard part to extract from the manual; for phase 2,
+each expression's typing rule transcribes almost mechanically into its
+`type_check` body.
+
+One question I kept returning to: with inheritance, why is a method checked
+once in its defining class still valid in every subclass, especially with
+`self` and SELF_TYPE involved? The answer is the lazy resolution above — the
+check is performed against SELF_TYPE's most flexible reading, so anything that
+passes it stays sound as the hierarchy grows downward.
 
 ## Tests
 
-<!-- TODO: tests/ organized per construct (class checks, each expression form,
-dispatch/static dispatch, SELF_TYPE cases); methodology: diff against the
-reference compiler for message wording and ordering; PA2-inherited idea of
-injecting a second error to prove recovery continues; pa3-grading.pl result. -->
+The suite has 30+ files, roughly one per language construct, so clear naming
+matters. If I had more time I would build an automatic runner that diffs every
+test against saved expected output; currently tests are run file by file.
+
+## Known Issues and Future Work
+
+From a code review; the crash bugs it found (undefined declared types in
+`let`/`case` reaching `conforms`) are fixed, the rest remains open:
+
+- **Error emission order.** Several checks emit errors while iterating
+  `class_map`/`attr_map`/`method_map`, whose Symbol-pointer keys give intern
+  order, not source order — the reference emits in source order. Fix: drive
+  error loops from the class list and `get_features()`; keep maps for lookup
+  only.
+- **Anchors and wording.** Some errors anchor to a different node than the
+  reference (`if`/`while` predicate, `let` init, duplicate features) and a few
+  message texts differ (trailing periods, formal-parameter wording).
+- **Hardening.** `class_map.find(...)->second` appears in seven places with
+  inconsistent failure behavior (assert vs unchecked UB). Extract one strict
+  `info_of(Symbol)` accessor with an assert so future gaps fail loudly.
+- **Smaller:** unused C++11 includes (`<regex>`, `<typeindex>`) that break
+  strict C++98 builds; `conforms`/`lub` need only a class name, not the whole
+  `TypeEnv`; misleading names (`is_basic_class` matches SELF_TYPE, `get_method`
+  walks the ancestor chain); some dead getters and locals.
