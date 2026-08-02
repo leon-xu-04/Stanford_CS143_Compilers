@@ -1,3 +1,14 @@
 *.o
+*.d
 *.cc
-assignments/PA1/lexer
+!src/PA3/semant.cc
+.cache/
+grading/
+compile_commands.json
+nvim.log
+src/PA1/lexer
+src/PA2/parser
+src/PA3/semant
+src/PA3/lexer
+src/PA3/parser
+src/PA3/cgen
