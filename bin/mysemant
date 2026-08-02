@@ -1,0 +1,3 @@
+#!/bin/csh -f
+set bindir = `dirname $0`
+$bindir/lexer $* | $bindir/parser $* | $bindir/semant $*
